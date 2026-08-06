@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <optional>
 #include <random>
 #include <span>
@@ -73,7 +74,7 @@ namespace refractir {
       enum class Kind { Int, Float, Array, Struct, Vec, Ptr, Undef } kind = Kind::Undef;
       ModelVal scalar;
       std::vector<LetExitValue> elems;
-      std::unordered_map<std::string, LetExitValue> fields;
+      std::map<std::string, LetExitValue> fields;
       // Ptr only: `targetLocal` is the entry-function let / param the
       // pointer's provenance base resolves to (FNV-1a inverse of the
       // model value of SymbolicValue::prov_base). `targetOffset` is

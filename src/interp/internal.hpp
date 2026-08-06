@@ -23,9 +23,9 @@ namespace refractir {
     return val;
   }
 
-  // Sign-canonicalize a 64-bit value to its declared N-bit signed width.
-  inline std::int64_t canonicalize(std::int64_t val, std::uint32_t bits) {
-    if (bits >= 64)
+  // Sign-canonicalize a 128-bit value to its declared N-bit signed width.
+  inline __int128 canonicalize(__int128 val, std::uint32_t bits) {
+    if (bits >= 128)
       return val;
     // [v0.2.2] Spec §6.4: i1 is a signed 1-bit integer.  The two
     // representable values are 0 (false) and -1 (true) — bit
@@ -34,12 +34,12 @@ namespace refractir {
     // already emits and what the spec mandates.
     if (bits == 1)
       return (val & 1) ? -1 : 0;
-    std::uint64_t mask = (1ULL << bits) - 1;
-    std::uint64_t sign_bit = 1ULL << (bits - 1);
-    std::uint64_t uval = static_cast<std::uint64_t>(val) & mask;
+    unsigned __int128 mask = ((unsigned __int128)1 << bits) - 1;
+    unsigned __int128 sign_bit = (unsigned __int128)1 << (bits - 1);
+    unsigned __int128 uval = static_cast<unsigned __int128>(val) & mask;
     if (uval & sign_bit)
       uval |= ~mask;
-    return static_cast<std::int64_t>(uval);
+    return static_cast<__int128>(uval);
   }
 
 } // namespace refractir

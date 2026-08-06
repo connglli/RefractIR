@@ -906,11 +906,12 @@ def test_rylink_homogeneous_outcomes(rylink, rysmith):
           f"stdout={r.stdout[:200]!r}",
         )
         both = r.stdout + r.stderr
+        has_fail_summary = " [FAIL] " in both
         check(
           f"{kind} pool: builds and validates OK",
           r.returncode == 0
           and "validated: OK" in r.stdout
-          and "validated: FAIL" not in both,
+          and not has_fail_summary,
           f"rc={r.returncode} out={both[:400]!r}",
         )
 

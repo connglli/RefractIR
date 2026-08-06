@@ -56,6 +56,11 @@ RUN git clone --depth 1 --branch 0.9.1 \
     && cd build && ninja install \
     && rm -rf /tmp/bitwuzla-src
 
+# — Install Clang ———————————————————————————————————————————
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      clang libclang-rt-18-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # — User (matches host UID/GID) ————————————————————
 RUN groupadd -g ${GID} refractir 2>/dev/null || true \
     && useradd -m -u ${UID} -g ${GID} -s /bin/bash refractir

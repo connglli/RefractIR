@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -23,7 +24,7 @@ namespace refractir {
     smt::Term term;       // For scalar Int (the BV value)
     smt::Term is_defined; // Boolean term: true if value is defined
     std::vector<SymbolicValue> arrayVal;
-    std::unordered_map<std::string, SymbolicValue> structVal;
+    std::map<std::string, SymbolicValue> structVal;
 
     smt::Term prov_base; // [v0.2.1] Pointer provenance base tag (BV64)
     smt::Term prov_size; // [v0.2.1] Pointer provenance size in tag-units (BV64)

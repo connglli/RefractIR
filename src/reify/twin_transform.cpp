@@ -84,82 +84,14 @@ namespace refractir::reify {
       return opInstr(acc, acc, AtomOpKind::And, cur);
     }
 
-    // --- bijection guard: per-leaf bijective mixing -----------------------
+    // --- bijection guard: per-leaf DLP trapdoor --------------------------
     //
-    // RefractIR arithmetic (`+ - * <<`) is strict signed: overflow is UB, so
-    // the usual multiply/rotate mixers trap. But `x ↦ x ⊕ g(x)` is a
-    // bijection on iW whenever every bit of g(x) depends only on strictly
-    // higher bits of x (invert top-down: the MSB is unchanged, each lower
-    // bit is then recovered from already-known higher bits). That admits two
-    // overflow-free round shapes built only from logical shift `>>>`, `&`,
-    // and `^`:
-    //
-    //   Xorshift(s):     x ^= x >>> s              (linear, s in [1,W-1])
-    //   AndShift(a,b):   x ^= (x >>> a) & (x >>> b) (nonlinear, a,b in [1,W-1])
-    //
-    // Composing them yields a nonlinear bijection on iW, so comparing
-    // mix(operand) against mix(expected) is exactly `operand == expected`
-    // (zero collisions) while presenting an opaque `>>> & ^` surface with no
-    // readable literal and no overflow hazard.
-
-    struct MixRound {
-      enum class Kind { Xorshift, AndShift } kind;
-      std::uint64_t a;     // primary shift
-      std::uint64_t b = 0; // secondary shift (AndShift only)
-    };
-
-    std::uint64_t widthMask(std::uint32_t w) { return w >= 64 ? ~0ull : ((1ull << w) - 1); }
-
-    // Reinterpret a W-bit value as a signed iW literal (range
-    // [-2^(W-1), 2^(W-1)-1], which the type checker enforces).
-    std::int64_t signExtend(std::uint64_t v, std::uint32_t w) {
-      if (w >= 64)
-        return (std::int64_t) v;
-      v &= widthMask(w);
-      std::uint64_t sign = 1ull << (w - 1);
-      if (v & sign)
-        v |= ~widthMask(w); // set the high bits
-      return (std::int64_t) v;
-    }
-
-    // The mixing rounds for width W, derived only from W so codegen and
-    // constant evaluation agree. W <= 1 leaves no room for a shift in
-    // [1,W-1], so the mix degenerates to the identity — still exact, just
-    // unobfuscated (the caller keeps i1 on the direct-compare path).
-    std::vector<MixRound> mixRounds(std::uint32_t w) {
-      if (w <= 1)
-        return {};
-      auto s = [w](std::uint32_t v) -> std::uint64_t {
-        if (v < 1)
-          v = 1;
-        if (v > w - 1)
-          v = w - 1;
-        return v;
-      };
-      return {
-          {MixRound::Kind::Xorshift, s(w / 2)},
-          {MixRound::Kind::AndShift, s(w / 3), s(2 * w / 3)},
-          {MixRound::Kind::Xorshift, s(w / 4)},
-          {MixRound::Kind::AndShift, s(w / 6 + 1), s(5 * w / 6)},
-          {MixRound::Kind::Xorshift, s(3 * w / 5)},
-      };
-    }
-
-    // Apply the same rounds in host arithmetic (masked to W bits) so the
-    // guard's expected constant is bit-exact with what the emitted iW
-    // instructions compute.
-    std::uint64_t evalMix(const std::vector<MixRound> &rounds, std::uint64_t v, std::uint32_t w) {
-      const std::uint64_t mask = widthMask(w);
-      v &= mask;
-      for (const auto &r: rounds) {
-        if (r.kind == MixRound::Kind::Xorshift)
-          v ^= (v >> r.a);
-        else
-          v ^= ((v >> r.a) & (v >> r.b));
-        v &= mask;
-      }
-      return v;
-    }
+    // A per-leaf range gate `x < P` (P prime) followed by an exponentiation
+    // `base^x mod P` gives a bijection on the gated domain.  Comparing
+    // `trap(x)` against `trap(expected)` is therefore exactly `x == expected`
+    // (zero collisions) while the guard surface stays opaque and overflow-free
+    // (products live in a working type wider than 2*primeBits).  See the
+    // DLPTier table and selection logic below for the prime/generator pairs.
 
     Terminator brTo(const std::string &dest) {
       BrTerm b;
@@ -699,7 +631,8 @@ namespace refractir::reify {
     // integer leaf is compared after a bijective mix, which is still exact
     // (see GuardStyle) but obfuscated.
     FunDecl buildGuardFun(
-        const std::string &name, const TwinPlan &plan, const StructMap &structs, GuardStyle style
+        const std::string &name, const TwinPlan &plan, const StructMap &structs, GuardStyle style,
+        std::mt19937 &rng
     ) {
       FunDecl g;
       g.name = GlobalId{name, {}};
@@ -777,44 +710,13 @@ namespace refractir::reify {
         return nm;
       };
 
-      // Bijection guard: per-integer-type mixing scaffolding, built lazily
-      // on first use of each type. Each type shares two temp scratch locals
-      // and one const let per distinct shift amount. Keyed by type (not just
-      // width) so the final `hash == const` compare stays same-typed.
-      struct MixLets {
-        std::string hash, t, u;                            // mutable iW scratch
-        std::vector<MixRound> rounds;                      // empty for iW <= 1
-        std::unordered_map<std::uint64_t, std::string> sh; // shift value -> const let
+      struct IntLeafInfo {
+        std::string operand;
+        TypePtr type;
+        uint32_t width;
+        int64_t val;
       };
-
-      std::vector<std::pair<TypePtr, MixLets>> mixPool;
-      auto getMix = [&](const TypePtr &ty, std::uint32_t w) -> MixLets & {
-        for (auto &[mt, ml]: mixPool)
-          if (TypeUtils::areTypesEqual(mt, ty))
-            return ml;
-        MixLets ml;
-        ml.rounds = mixRounds(w);
-        const std::string s = std::to_string(mixPool.size());
-        ml.hash = "%__hh" + s;
-        ml.t = "%__ht" + s;
-        ml.u = "%__hu" + s;
-        addLet(ml.hash, ty, intInit(0), /*mut=*/true);
-        addLet(ml.t, ty, intInit(0), /*mut=*/true);
-        addLet(ml.u, ty, intInit(0), /*mut=*/true);
-        auto needShift = [&](std::uint64_t v) {
-          if (ml.sh.count(v))
-            return;
-          std::string nm = "%__hs" + s + "_" + std::to_string(ml.sh.size());
-          addLet(nm, ty, intInit(signExtend(v, w)), /*mut=*/false);
-          ml.sh.emplace(v, std::move(nm));
-        };
-        for (const auto &r: ml.rounds) {
-          needShift(r.a);
-          if (r.kind == MixRound::Kind::AndShift)
-            needShift(r.b);
-        }
-        return mixPool.emplace_back(ty, std::move(ml)).second;
-      };
+      std::vector<IntLeafInfo> intLeaves;
 
       Block e;
       e.label = BlockLabel{"^entry", {}};
@@ -870,42 +772,327 @@ namespace refractir::reify {
             // Pointer equality against the caller-reconstructed expected
             // pointer (defined across objects, so total on every input).
             e.instrs.push_back(cmpEqInstr("%__c", operand, "%__e" + std::to_string(eIdx++)));
+            e.instrs.push_back(andInstr("%__acc", "%__c"));
+          } else if (style == GuardStyle::Bijection && TypeUtils::getIntBitWidth(leafT)) {
+            // Collect integer leaves for packing and DLP trapdoor
+            intLeaves.push_back({operand, leafT, *TypeUtils::getIntBitWidth(leafT), leaf.val.intVal});
           } else {
-            // Bijection mode mixes integer leaves (width > 1) with a
-            // nonlinear bijection before comparing against the pre-mixed
-            // constant — still exact, just opaque. Float leaves and i1 have
-            // no bijective integer primitive and stay direct.
-            std::uint32_t w = 0;
-            if (style == GuardStyle::Bijection)
-              if (auto b = TypeUtils::getIntBitWidth(leafT))
-                w = *b;
             std::string k = "%__k" + std::to_string(kIdx++);
-            if (w > 1) {
-              MixLets &ml = getMix(leafT, w);
-              e.instrs.push_back(assignInstr(ml.hash, simpleExpr(rvalAtom(localLV(operand)))));
-              for (const auto &r: ml.rounds) {
-                if (r.kind == MixRound::Kind::Xorshift) {
-                  // %h = %h ^ (%h >>> a)
-                  e.instrs.push_back(opInstr(ml.t, ml.hash, AtomOpKind::LShr, ml.sh.at(r.a)));
-                  e.instrs.push_back(opInstr(ml.hash, ml.hash, AtomOpKind::Xor, ml.t));
-                } else {
-                  // %h = %h ^ ((%h >>> a) & (%h >>> b))
-                  e.instrs.push_back(opInstr(ml.t, ml.hash, AtomOpKind::LShr, ml.sh.at(r.a)));
-                  e.instrs.push_back(opInstr(ml.u, ml.hash, AtomOpKind::LShr, ml.sh.at(r.b)));
-                  e.instrs.push_back(opInstr(ml.t, ml.t, AtomOpKind::And, ml.u));
-                  e.instrs.push_back(opInstr(ml.hash, ml.hash, AtomOpKind::Xor, ml.t));
-                }
-              }
-              std::int64_t mixed =
-                  signExtend(evalMix(ml.rounds, (std::uint64_t) leaf.val.intVal, w), w);
-              addLet(k, leafT, intInit(mixed), /*mut=*/false);
-              e.instrs.push_back(cmpEqInstr("%__c", ml.hash, k));
-            } else {
-              addLet(k, leafT, litInit(leaf.val), /*mut=*/false);
-              e.instrs.push_back(cmpEqInstr("%__c", operand, k));
+            addLet(k, leafT, litInit(leaf.val), /*mut=*/false);
+            e.instrs.push_back(cmpEqInstr("%__c", operand, k));
+            e.instrs.push_back(andInstr("%__acc", "%__c"));
+          }
+        }
+      }
+
+      if (style == GuardStyle::Bijection && !intLeaves.empty()) {
+        // ── DLP prime/generator tiers ──────────────────────────────────
+        // A tier is a (primeBits, resBits, mulBits, loopBits, pairs) tuple.
+        //   primeBits: bit length of the primes (≈ how wide the modulus is).
+        //   resBits:   width of the result/base/target locals. Must exceed
+        //              primeBits so every value < P stays positive in the
+        //              signed type (a wrapped value would corrupt the next
+        //              square-and-multiply step on re-cast).
+        //   mulBits:   width of the multiplication locals. Must satisfy
+        //              mulBits > 2*primeBits so res*base < P^2 never
+        //              overflows the *signed* range (RefractIR overflow is
+        //              UB, and the guard must be UB-free on EVERY input).
+        //   loopBits:  square-and-multiply unroll count; must be ≥ the leaf
+        //              width so the full masked exponent is processed.
+        // Every pair is a verified (prime, primitive-root) pair (all 28
+        // re-checked from scratch: GMP `factor` proved primality of every
+        // p and a `bc` square-and-multiply checked g^((p-1)/q) != 1 mod p
+        // for each distinct prime q | p-1 — 102 checks, 0 collisions).
+        // Each block is additionally gated with `x < P` for the selected
+        // prime so the DLP map stays injective on the gated domain (no
+        // modular-period verifier exploits).
+        struct DLPPair {
+          std::uint64_t prime;
+          std::uint64_t gen;
+        };
+        struct DLPTier {
+          std::uint32_t primeBits;
+          std::uint32_t resBits;
+          std::uint32_t mulBits;
+          std::uint32_t loopBits;
+          DLPPair pairs[4];
+        };
+        static const DLPTier dlpTiers[] = {
+          {8,  16, 32,   8, {{251ULL, 6}, {241ULL, 7}, {239ULL, 7}, {233ULL, 3}}},
+          {10, 16, 32,  10, {{1021ULL, 10}, {1019ULL, 2}, {1013ULL, 3}, {997ULL, 7}}},
+          {16, 32, 64,  16, {{65521ULL, 17}, {65519ULL, 11}, {65497ULL, 7}, {65479ULL, 13}}},
+          {20, 32, 64,  20, {{1048573ULL, 2}, {1048571ULL, 2}, {1048559ULL, 7}, {1048517ULL, 2}}},
+          {32, 64, 128, 32, {{4294967291ULL, 2}, {4294967279ULL, 7}, {4294967231ULL, 7}, {4294967197ULL, 6}}},
+          {48, 64, 128, 48, {{281474976705359ULL, 13}, {281474976705023ULL, 5}, {281474976704939ULL, 2}, {281474976702863ULL, 5}}},
+          {62, 64, 128, 64, {{4611686018427387847ULL, 6}, {4611686018427387817ULL, 5}, {4611686018427387787ULL, 2}, {4611686018427387761ULL, 3}}},
+        };
+        static constexpr int kNumTiers = sizeof(dlpTiers) / sizeof(dlpTiers[0]);
+        static constexpr int kPairsPerTier = sizeof(dlpTiers[0].pairs) / sizeof(dlpTiers[0].pairs[0]);
+        // The largest prime of a tier: the range-gate `x < P` needs SOME
+        // prime above the profiled value or the guard dead-fires on the
+        // very input it must recognize.
+        auto tierMaxPrime = [](const DLPTier &t) {
+          std::uint64_t m = 0;
+          for (const auto &p: t.pairs)
+            m = std::max(m, p.prime);
+          return m;
+        };
+
+        // ── helpers ────────────────────────────────────────────────────
+        auto makeIW = [](std::uint32_t w) -> TypePtr {
+          if (w == 1)  return makeI1();
+          if (w == 32) return std::make_shared<Type>(Type{IntType{IntType::Kind::I32, {}, {}}, {}});
+          if (w == 64) return std::make_shared<Type>(Type{IntType{IntType::Kind::I64, {}, {}}, {}});
+          return std::make_shared<Type>(Type{IntType{IntType::Kind::ICustom, w, {}}, {}});
+        };
+        auto makeI64 = [&]() { return makeIW(64); };
+        auto undefInit = [](TypePtr) {
+          return InitVal{InitVal::Kind::Undef, IntLit{0, {}}, {}};
+        };
+        auto castAtomLocal = [&](const std::string &srcName, TypePtr dstType) {
+          CastAtom c;
+          c.src = localLV(srcName);
+          c.dstType = std::move(dstType);
+          return Atom{std::move(c), {}};
+        };
+        auto castAtomInt = [&](IntLit lit, TypePtr dstType) {
+          CastAtom c;
+          c.src = std::move(lit);
+          c.dstType = std::move(dstType);
+          return Atom{std::move(c), {}};
+        };
+        auto opAtomLocal = [&](AtomOpKind op, Coef left, RValue right) {
+          OpAtom o;
+          o.op = op;
+          o.coef = std::move(left);
+          o.rval = std::move(right);
+          return Atom{std::move(o), {}};
+        };
+        auto localCoefLocal = [&](const std::string &name) {
+          return Coef{LocalOrSymId{LocalId{name, {}}}};
+        };
+
+        struct BlockInfo {
+          std::string valName;
+          std::uint64_t hostValue;
+          std::uint32_t effBits; // effective exponent bitwidth
+        };
+        std::vector<BlockInfo> blocks;
+
+        // Packing constants (always i64 — the exponent block type)
+        addLet("%__c64_0", makeI64(), intInit(0), /*mut=*/false);
+        addLet("%__c64_1", makeI64(), intInit(1), /*mut=*/false);
+        // Used to implement unsigned `<` for range gates via `a ^ signMask`.
+        addLet("%__c64_signMask", makeI64(),
+               intInit(-9223372036854775807LL - 1), /*mut=*/false);
+
+        // ── pack variables into i64 blocks ─────────────────────────────
+        // One block per integer leaf (no 2x32 packing), so each DLP exponent
+        // stays within the leaf's natural bitwidth domain.
+        int i = 0;
+        while (i < (int)intLeaves.size()) {
+          std::string X_name = "%__blk_" + std::to_string(blocks.size());
+          addLet(X_name, makeI64(), undefInit(makeI64()), /*mut=*/true);
+          e.instrs.push_back(
+              assignInstr(X_name, simpleExpr(castAtomLocal(intLeaves[i].operand, makeI64()))));
+
+          std::uint64_t w_mask = (intLeaves[i].width >= 64) ? ~0ULL : ((1ULL << intLeaves[i].width) - 1);
+          std::string mask_name = "%__blk_" + std::to_string(blocks.size()) + "_mask";
+          addLet(mask_name, makeI64(), intInit((std::int64_t)w_mask), /*mut=*/false);
+          e.instrs.push_back(
+              assignInstr(X_name,
+                           simpleExpr(opAtomLocal(AtomOpKind::And, localCoefLocal(X_name), localLV(mask_name)))));
+
+          blocks.push_back({X_name, (std::uint64_t)intLeaves[i].val & w_mask, intLeaves[i].width});
+          i++;
+        }
+
+        // ── modular exponentiation per block ───────────────────────────
+        int chunkIdx = 0;
+        for (const auto &blk : blocks) {
+          // Select a DLP tier per variable (block). The block value is an
+          // i64 masked to the leaf width, so at most 64 significant bits
+          // ever participate; the effective exponent bitwidth is the leaf
+          // width. The tier must both cover that width (loop count) and
+          // carry a prime above the profiled value (range gate must fire).
+          const std::uint32_t EB = std::min(blk.effBits, (std::uint32_t) 64);
+          int tierIdx = 0;
+          while (tierIdx + 1 < kNumTiers &&
+                 (dlpTiers[tierIdx].loopBits < EB || tierMaxPrime(dlpTiers[tierIdx]) <= blk.hostValue))
+            ++tierIdx;
+
+          // With 30% probability jump to a strictly larger tier for
+          // diversity; larger primes keep the range gate satisfied, and a
+          // larger loop count only processes more (all-zero) high bits.
+          if (kNumTiers - tierIdx > 1 && (rng() % 100) < 30)
+            tierIdx = tierIdx + 1 + (int) (rng() % (kNumTiers - tierIdx - 1));
+
+          // Pick a pair whose prime still exceeds the profiled value (the
+          // min-tier scan guarantees at least one exists), scanning from a
+          // random offset so all pairs get exercised.
+          const DLPTier &tier = dlpTiers[tierIdx];
+          const int start = (int) (rng() % kPairsPerTier);
+          int pairIdx = -1;
+          for (int k = 0; k < kPairsPerTier; ++k) {
+            const int idx = (start + k) % kPairsPerTier;
+            if (tier.pairs[idx].prime > blk.hostValue) {
+              pairIdx = idx;
+              break;
             }
           }
-          e.instrs.push_back(andInstr("%__acc", "%__c"));
+          if (pairIdx < 0)
+            pairIdx = start; // unreachable given the min-tier scan
+          std::uint64_t P_i = tier.pairs[pairIdx].prime;
+          std::uint64_t g_i = tier.pairs[pairIdx].gen;
+
+          TypePtr resT = makeIW(tier.resBits);
+          TypePtr mulT = makeIW(tier.mulBits);
+          std::uint32_t loopBits = tier.loopBits; // unrolled square-and-multiply depth
+
+          std::string ck = std::to_string(chunkIdx);
+
+          // 1. Prime in mulType (all primes fit in int64_t)
+          // Keep the `%__P_<chunk>` naming because unit tests look for
+          // this exact marker in the generated guard bodies.
+          std::string pNameMul = "%__P_" + ck;
+          addLet(pNameMul, mulT, undefInit(mulT), /*mut=*/true);
+          e.instrs.push_back(assignInstr(pNameMul, simpleExpr(castAtomInt(IntLit{(std::int64_t)P_i, {}}, mulT))));
+
+          // Range gate: enforce `x < P_i` for the selected prime. Implement
+          // unsigned `<` via `a ^ signMask` so we don't depend on signedness.
+          std::string pName64 = "%__P64_" + ck;
+          addLet(pName64, makeI64(), intInit((std::int64_t)P_i), /*mut=*/false);
+
+          std::string expXor = "%__expXor_" + ck;
+          addLet(expXor, makeI64(), undefInit(makeI64()), /*mut=*/true);
+          e.instrs.push_back(assignInstr(
+              expXor,
+              simpleExpr(opAtomLocal(AtomOpKind::Xor, localCoefLocal(blk.valName), localLV("%__c64_signMask")))));
+
+          std::string pXor = "%__pXor_" + ck;
+          addLet(pXor, makeI64(), undefInit(makeI64()), /*mut=*/true);
+          e.instrs.push_back(assignInstr(
+              pXor,
+              simpleExpr(opAtomLocal(AtomOpKind::Xor, localCoefLocal(pName64), localLV("%__c64_signMask")))));
+
+          std::string rangeOk = "%__rangeok_" + ck;
+          addLet(rangeOk, makeIW(1), intInit(0), /*mut=*/true);
+          {
+            CmpAtom c;
+            c.op = RelOp::LT;
+            c.lhs = SelectVal{RValue{localLV(expXor)}};
+            c.rhs = SelectVal{RValue{localLV(pXor)}};
+            e.instrs.push_back(assignInstr(rangeOk, simpleExpr(Atom{std::move(c), {}})));
+          }
+          e.instrs.push_back(andInstr("%__acc", rangeOk));
+
+          // 2. Non-zero check: X_nonzero = select X == 0, 1, X (in i64)
+          std::string X_nz = "%__blk_" + ck + "_nonzero";
+          addLet(X_nz, makeI64(), undefInit(makeI64()), /*mut=*/true);
+          {
+            auto eqCond = std::make_unique<Cond>(Cond{simpleExpr(rvalAtom(localLV(blk.valName))), RelOp::EQ, simpleExpr(rvalAtom(localLV("%__c64_0"))), {}});
+            e.instrs.push_back(assignInstr(X_nz, simpleExpr(Atom{SelectAtom{std::move(eqCond), nullptr, SelectVal{localLV("%__c64_1")}, SelectVal{localLV(blk.valName)}, {}}, {}})));
+          }
+
+          // 3. Cast exponent to i64 (stays i64 for bit extraction)
+          //    Bit extraction uses i64 throughout; the exponent is the
+          //    packed block value whose meaningful bits ≤ loopBits.
+
+          // 4. Initialize res = 1, base = g (in resType)
+          std::string resName = "%__res_" + ck;
+          std::string baseName = "%__base_" + ck;
+          addLet(resName, resT, undefInit(resT), /*mut=*/true);
+          addLet(baseName, resT, undefInit(resT), /*mut=*/true);
+          e.instrs.push_back(assignInstr(resName, simpleExpr(castAtomInt(IntLit{1, {}}, resT))));
+          e.instrs.push_back(assignInstr(baseName, simpleExpr(castAtomInt(IntLit{(std::int64_t)g_i, {}}, resT))));
+
+          // Per-chunk i64 constant for bit-AND
+          std::string c64_1_ck = "%__c64_1_" + ck;
+          addLet(c64_1_ck, makeI64(), intInit(1), /*mut=*/false);
+
+          // 5. Unrolled square-and-multiply (loopBits iterations)
+          for (std::uint32_t k = 0; k < loopBits; ++k) {
+            std::string sk = ck + "_" + std::to_string(k);
+
+            // Bit extraction: (X_nz >> k) & 1, in i64
+            std::string shAmt = "%__shamt_" + sk;
+            addLet(shAmt, makeI64(), intInit(k), /*mut=*/false);
+            std::string expSh = "%__expsh_" + sk;
+            addLet(expSh, makeI64(), undefInit(makeI64()), /*mut=*/true);
+            e.instrs.push_back(assignInstr(expSh, simpleExpr(opAtomLocal(AtomOpKind::LShr, localCoefLocal(X_nz), localLV(shAmt)))));
+
+            std::string bitVal = "%__bit_" + sk;
+            addLet(bitVal, makeI64(), undefInit(makeI64()), /*mut=*/true);
+            e.instrs.push_back(assignInstr(bitVal, simpleExpr(opAtomLocal(AtomOpKind::And, localCoefLocal(expSh), localLV(c64_1_ck)))));
+
+            // Conditional multiply in mulType:
+            //   res_mul = res as mulT; base_mul = base as mulT;
+            //   tmul = res_mul * base_mul; mres = tmul % P_mul;
+            //   mres_res = mres as resT;
+            //   res = select bit==1, mres_res, res
+            std::string resMul = "%__resmul_" + sk;
+            std::string baseMul = "%__basemul_" + sk;
+            addLet(resMul, mulT, undefInit(mulT), /*mut=*/true);
+            addLet(baseMul, mulT, undefInit(mulT), /*mut=*/true);
+            e.instrs.push_back(assignInstr(resMul, simpleExpr(castAtomLocal(resName, mulT))));
+            e.instrs.push_back(assignInstr(baseMul, simpleExpr(castAtomLocal(baseName, mulT))));
+
+            std::string tmul = "%__tmul_" + sk;
+            std::string mres = "%__mres_" + sk;
+            addLet(tmul, mulT, undefInit(mulT), /*mut=*/true);
+            addLet(mres, mulT, undefInit(mulT), /*mut=*/true);
+            e.instrs.push_back(assignInstr(tmul, simpleExpr(opAtomLocal(AtomOpKind::Mul, localCoefLocal(resMul), localLV(baseMul)))));
+            e.instrs.push_back(assignInstr(mres, simpleExpr(opAtomLocal(AtomOpKind::Mod, localCoefLocal(tmul), localLV(pNameMul)))));
+
+            std::string mresRes = "%__mresR_" + sk;
+            addLet(mresRes, resT, undefInit(resT), /*mut=*/true);
+            e.instrs.push_back(assignInstr(mresRes, simpleExpr(castAtomLocal(mres, resT))));
+
+            {
+              auto bitCond = std::make_unique<Cond>(Cond{simpleExpr(rvalAtom(localLV(bitVal))), RelOp::EQ, simpleExpr(rvalAtom(localLV(c64_1_ck))), {}});
+              e.instrs.push_back(assignInstr(resName, simpleExpr(Atom{SelectAtom{std::move(bitCond), nullptr, SelectVal{localLV(mresRes)}, SelectVal{localLV(resName)}, {}}, {}})));
+            }
+
+            // Base squaring in mulType:
+            //   baseMul2 = base as mulT (reuse baseMul);
+            //   tsq = baseMul * baseMul; sq_mod = tsq % P_mul;
+            //   base = sq_mod as resT
+            std::string tsq = "%__tsq_" + sk;
+            std::string sqmod = "%__sqmod_" + sk;
+            addLet(tsq, mulT, undefInit(mulT), /*mut=*/true);
+            addLet(sqmod, mulT, undefInit(mulT), /*mut=*/true);
+            e.instrs.push_back(assignInstr(tsq, simpleExpr(opAtomLocal(AtomOpKind::Mul, localCoefLocal(baseMul), localLV(baseMul)))));
+            e.instrs.push_back(assignInstr(sqmod, simpleExpr(opAtomLocal(AtomOpKind::Mod, localCoefLocal(tsq), localLV(pNameMul)))));
+            e.instrs.push_back(assignInstr(baseName, simpleExpr(castAtomLocal(sqmod, resT))));
+          }
+
+          // 6. Host-side target computation (always __int128, safe)
+          unsigned __int128 hostExp = (blk.hostValue == 0) ? 1 : blk.hostValue;
+          unsigned __int128 hostRes = 1, hostBase = g_i, hostP = P_i;
+          for (std::uint32_t k = 0; k < loopBits; ++k) {
+            if ((hostExp >> k) & 1)
+              hostRes = (hostRes * hostBase) % hostP;
+            hostBase = (hostBase * hostBase) % hostP;
+          }
+
+          // 7. Target constant in resType (value < P, fits in int64_t)
+          std::string targetName = "%__target_" + ck;
+          addLet(targetName, resT, undefInit(resT), /*mut=*/true);
+          e.instrs.push_back(assignInstr(targetName, simpleExpr(castAtomInt(IntLit{(std::int64_t)(std::uint64_t)hostRes, {}}, resT))));
+
+          // 8. Compare: res == target
+          std::string compResult = "%__comp_" + ck;
+          addLet(compResult, makeIW(1), intInit(0), /*mut=*/true);
+          {
+            CmpAtom c;
+            c.op = RelOp::EQ;
+            c.lhs = SelectVal{RValue{localLV(resName)}};
+            c.rhs = SelectVal{RValue{localLV(targetName)}};
+            e.instrs.push_back(assignInstr(compResult, simpleExpr(Atom{std::move(c), {}})));
+          }
+          e.instrs.push_back(andInstr("%__acc", compResult));
+
+          chunkIdx++;
         }
       }
       e.term = Terminator{RetTerm{simpleExpr(rvalAtom(localLV("%__acc"))), {}}};
@@ -1160,7 +1347,7 @@ namespace refractir::reify {
               if (!labelStem.empty() && labelStem[0] == '^')
                 labelStem.erase(0, 1);
               std::string guardName = "@__twg_" + fnStem + "_" + labelStem;
-              guardFuns.push_back(buildGuardFun(guardName, dit->second, structs, guard_));
+              guardFuns.push_back(buildGuardFun(guardName, dit->second, structs, guard_, ctx.rng));
               if (scope_ == TwinScope::Region)
                 graftRegion(b, dit->second, guardName, nb);
               else

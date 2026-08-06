@@ -17,6 +17,27 @@
 
 namespace refractir {
 
+  static std::ostream &operator<<(std::ostream &os, __int128 val) {
+    if (val == 0) return os << "0";
+    char buf[128];
+    int pos = 127;
+    buf[pos] = '\0';
+    bool neg = false;
+    unsigned __int128 u = val;
+    if (val < 0) {
+      neg = true;
+      u = -val;
+    }
+    while (u > 0) {
+      buf[--pos] = '0' + (u % 10);
+      u /= 10;
+    }
+    if (neg) {
+      buf[--pos] = '-';
+    }
+    return os << &buf[pos];
+  }
+
   Interpreter::Interpreter(const Program &prog) : Interpreter(prog, std::cout) {}
 
   Interpreter::Interpreter(const Program &prog, std::ostream &out) :

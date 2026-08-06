@@ -134,8 +134,10 @@ namespace refractir {
                 out_ << "int16_t";
               else if (b <= 32)
                 out_ << "int32_t";
-              else
+              else if (b <= 64)
                 out_ << "int64_t";
+              else
+                out_ << "__int128";
             }
           } else if constexpr (std::is_same_v<T, FloatType>) {
             out_ << (arg.kind == FloatType::Kind::F32 ? "float" : "double");

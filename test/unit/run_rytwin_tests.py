@@ -574,6 +574,92 @@ fun @narrow(%pa0: i8) : i8 {
       check("narrow guard still mixes on i8", ">>>" in body, body[:120])
 
 
+def test_dlp_bijection_structure(rytwin):
+  """Checks that the bijection guard generates the DLP (Discrete Logarithm Problem)
+  structure (such as P primes and unrolled square-and-multiply loops) instead of the
+  older Murmur-like round structure, and that the multi-size DLP tier table picks
+  width-appropriate working types."""
+  with tempfile.TemporaryDirectory() as d:
+    p1 = os.path.join(d, "sigfix.sir")
+    open(p1, "w").write(BIJ_FIXTURE)
+    p2 = os.path.join(d, "p2.sir")
+    r = run(
+      [
+        rytwin,
+        p1,
+        "--p-twin",
+        "1.0",
+        "--seed",
+        "3",
+        "--twin-guard",
+        "bijection",
+        "-o",
+        p2,
+      ]
+    )
+    check("dlp bijection twinned successfully", r.returncode == 0, r.stderr[:200])
+    if r.returncode == 0:
+      body = "".join(guard_fun_bodies(open(p2).read()).values())
+      check("dlp bijection contains modular base generator", "%__P_0" in body, body[:200])
+      check("dlp bijection utilizes modular multiplication loops", "*" in body, body[:200])
+      check("dlp bijection contains i128 castings", "as i128" in body, body[:200])
+
+
+def test_dlp_bijection_tier_diversity(rytwin):
+  """[multi-size DLP] The tier table is actually tiered: an i8 leaf's guard
+  uses small working types (i16/i32 casts) at least some of the time — the
+  small tiers are reachable — while the (injectivity-preserving) range gate
+  and a small prime still appear."""
+  fixture = """// SOLVED: %pa0=5
+fun @tiers(%pa0: i8) : i8 {
+  let mut %a: i8 = 9;
+  let mut %b: i8 = 100;
+  ^entry:
+    br ^work;
+  ^work:
+    %a = %a + %pa0;
+    br ^exit;
+  ^exit:
+    ret %a;
+}
+"""
+  with tempfile.TemporaryDirectory() as d:
+    p1 = os.path.join(d, "tiers.sir")
+    open(p1, "w").write(fixture)
+    small = 0
+    bodies = []
+    for seed in range(1, 21):
+      p2 = os.path.join(d, f"p2_{seed}.sir")
+      r = run(
+        [
+          rytwin,
+          p1,
+          "--p-twin",
+          "1.0",
+          "--seed",
+          str(seed),
+          "--twin-guard",
+          "bijection",
+          "-o",
+          p2,
+        ]
+      )
+      if r.returncode != 0:
+        continue
+      body = "".join(guard_fun_bodies(open(p2).read()).values())
+      bodies.append(body)
+      if ("as i16" in body or "as i32" in body) and ("%__P_" in body):
+        small += 1
+    check("dlp tier fixture twinned at least once", len(bodies) > 0, "")
+    check(
+      "some i8 guard uses a small-tier working type (i16/i32)",
+      small > 0,
+      f"{small}/{len(bodies)} runs showed a small type",
+    )
+    if bodies:
+      check("small-tier guard still carries a range gate + prime", "%__P64_" in bodies[-1], "")
+
+
 # --- region twins (--twin-scope region) ---------------------------------
 #
 # The region scope generalizes the twin unit from one block to the maximal
@@ -1878,6 +1964,14 @@ def main():
     (
       "bijection guard: narrow (i8) width validates",
       lambda: test_bijection_guard_small_width(rytwin),
+    ),
+    (
+      "bijection guard: DLP structure checks",
+      lambda: test_dlp_bijection_structure(rytwin),
+    ),
+    (
+      "bijection guard: DLP multi-size tier diversity",
+      lambda: test_dlp_bijection_tier_diversity(rytwin),
     ),
     (
       "region scope: --twin-scope option accepted/rejected",

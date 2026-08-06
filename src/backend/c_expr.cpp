@@ -497,13 +497,17 @@ namespace refractir {
     // inner `(int64_t)` also converts float sources, whose
     // out-of-range values are UB anyway (SPEC rule 8).
     std::uint32_t dstBits = intDst ? TypeUtils::getIntBitWidth(arg.dstType).value_or(64) : 64;
-    const bool nativeDst = dstBits == 8 || dstBits == 16 || dstBits == 32 || dstBits == 64;
+    const bool nativeDst = dstBits == 8 || dstBits == 16 || dstBits == 32 || dstBits == 64 || dstBits == 128;
     const bool needTrunc = intDst && !nativeDst;
     out_ << "(";
     emitType(arg.dstType);
     out_ << ")(";
     if (needTrunc) {
-      out_ << "(int64_t)((uint64_t)((int64_t)(";
+      if (dstBits > 64) {
+        out_ << "(__int128)((unsigned __int128)((__int128)(";
+      } else {
+        out_ << "(int64_t)((uint64_t)((int64_t)(";
+      }
     }
     if (needSext) {
       // Sign-extend via unsigned shift so UBSan doesn't trip on
@@ -534,7 +538,7 @@ namespace refractir {
       out_ << ") << " << shift << ") >> " << shift;
     }
     if (needTrunc) {
-      std::uint32_t shift = 64u - dstBits;
+      std::uint32_t shift = (dstBits > 64 ? 128u : 64u) - dstBits;
       out_ << ")) << " << shift << ") >> " << shift;
     }
     out_ << ")";

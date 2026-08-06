@@ -8,10 +8,28 @@
 
 namespace refractir {
 
+  static std::string formatInt128(__int128 val) {
+    if (val == 0) return "0";
+    bool neg = false;
+    unsigned __int128 uval = val;
+    if (val < 0) {
+      neg = true;
+      uval = -val; // safely negates to unsigned 128-bit
+    }
+    std::string s;
+    while (uval > 0) {
+      s += (char)('0' + (uval % 10));
+      uval /= 10;
+    }
+    if (neg) s += '-';
+    std::reverse(s.begin(), s.end());
+    return s;
+  }
+
   std::string Interpreter::rvToString(const RuntimeValue &rv) const {
     switch (rv.kind) {
       case RuntimeValue::Kind::Int:
-        return std::to_string(rv.intVal);
+        return formatInt128(rv.intVal);
       case RuntimeValue::Kind::Float:
         return std::to_string(rv.floatVal);
       case RuntimeValue::Kind::Undef:

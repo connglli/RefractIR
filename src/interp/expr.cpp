@@ -199,13 +199,13 @@ namespace refractir {
         if (rL.kind == RuntimeValue::Kind::Int) {
           laneRes.kind = RuntimeValue::Kind::Int;
           laneRes.bits = rL.bits;
-          int64_t bw_smax = (rL.bits == 64) ? INT64_MAX : ((INT64_C(1) << (rL.bits - 1)) - 1);
-          int64_t bw_smin = (rL.bits == 64) ? INT64_MIN : (-(INT64_C(1) << (rL.bits - 1)));
+          __int128 bw_smax = (rL.bits == 128) ? (((unsigned __int128)1 << 127) - 1) : ((rL.bits == 64) ? INT64_MAX : ((INT64_C(1) << (rL.bits - 1)) - 1));
+          __int128 bw_smin = (rL.bits == 128) ? -((unsigned __int128)1 << 127) : ((rL.bits == 64) ? INT64_MIN : (-(INT64_C(1) << (rL.bits - 1))));
           if (arg.op == AtomOpKind::Mul) {
             __int128 p = (__int128) cL.intVal * rL.intVal;
             if (p > (__int128) bw_smax || p < (__int128) bw_smin)
               throw UndefinedBehaviorError("UB: vector lane overflow in *");
-            laneRes.intVal = static_cast<int64_t>(p);
+            laneRes.intVal = p;
           } else if (arg.op == AtomOpKind::Div) {
             if (rL.intVal == 0)
               throw UndefinedBehaviorError("UB: vector lane division by zero");
@@ -234,12 +234,12 @@ namespace refractir {
               __int128 p = (__int128) cL.intVal << rL.intVal;
               if (p > (__int128) bw_smax || p < (__int128) bw_smin)
                 throw UndefinedBehaviorError("UB: vector lane overflow in <<");
-              laneRes.intVal = static_cast<int64_t>(p);
+              laneRes.intVal = p;
             } else if (arg.op == AtomOpKind::Shr) {
               laneRes.intVal = cL.intVal >> rL.intVal;
             } else {
-              uint64_t mask = (laneRes.bits >= 64) ? ~0ULL : (1ULL << laneRes.bits) - 1;
-              laneRes.intVal = (int64_t) ((static_cast<uint64_t>(cL.intVal) & mask) >> rL.intVal);
+              unsigned __int128 mask = (laneRes.bits >= 128) ? ~(unsigned __int128)0 : ((unsigned __int128)1 << laneRes.bits) - 1;
+              laneRes.intVal = (static_cast<unsigned __int128>(cL.intVal) & mask) >> rL.intVal;
             }
           }
           laneRes.intVal = canonicalize(laneRes.intVal, laneRes.bits);
@@ -289,14 +289,14 @@ namespace refractir {
       res.bits = c.bits;
 
       // Compute bitwidth-specific signed min/max for overflow detection.
-      int64_t bw_smax = (c.bits == 64) ? INT64_MAX : ((INT64_C(1) << (c.bits - 1)) - 1);
-      int64_t bw_smin = (c.bits == 64) ? INT64_MIN : (-(INT64_C(1) << (c.bits - 1)));
+      __int128 bw_smax = (c.bits == 128) ? (((unsigned __int128)1 << 127) - 1) : ((c.bits == 64) ? INT64_MAX : ((INT64_C(1) << (c.bits - 1)) - 1));
+      __int128 bw_smin = (c.bits == 128) ? -((unsigned __int128)1 << 127) : ((c.bits == 64) ? INT64_MIN : (-(INT64_C(1) << (c.bits - 1))));
 
       if (arg.op == AtomOpKind::Mul) {
-        __int128 prod = (__int128) c.intVal * (__int128) r.intVal;
+        __int128 prod = c.intVal * r.intVal;
         if (prod > (__int128) bw_smax || prod < (__int128) bw_smin)
           throw UndefinedBehaviorError("UB: Signed integer overflow in multiplication");
-        res.intVal = static_cast<int64_t>(prod);
+        res.intVal = prod;
       } else if (arg.op == AtomOpKind::Div) {
         if (r.intVal == 0)
           throw UndefinedBehaviorError("UB: Division by zero");
@@ -326,16 +326,16 @@ namespace refractir {
           // (signed-integer overflow, same footing as +/-/*).
           if (c.intVal < 0)
             throw UndefinedBehaviorError("UB: Left shift of negative");
-          __int128 prod = (__int128) c.intVal << r.intVal;
+          __int128 prod = c.intVal << r.intVal;
           if (prod > (__int128) bw_smax || prod < (__int128) bw_smin)
             throw UndefinedBehaviorError("UB: Signed integer overflow in shift");
-          res.intVal = static_cast<int64_t>(prod);
+          res.intVal = prod;
         } else if (arg.op == AtomOpKind::Shr) {
           res.intVal = c.intVal >> r.intVal;
         } else {
           // Logical shift right: mask to width first
-          uint64_t mask = (res.bits >= 64) ? ~0ULL : (1ULL << res.bits) - 1;
-          res.intVal = (int64_t) ((static_cast<uint64_t>(c.intVal) & mask) >> r.intVal);
+          unsigned __int128 mask = (res.bits >= 128) ? ~(unsigned __int128)0 : ((unsigned __int128)1 << res.bits) - 1;
+          res.intVal = (static_cast<unsigned __int128>(c.intVal) & mask) >> r.intVal;
         }
       }
       res.intVal = canonicalize(res.intVal, res.bits);

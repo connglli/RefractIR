@@ -79,6 +79,17 @@ considered and dropped (spec §13).
   swaps the uniform `--p-twin` coin for a selection policy that softmax-tilts
   each region's twin probability by how hard its twin is to prove equivalent
   (loop-collapse dominating), concentrating twins on the hardest regions.
+- **Multi-size DLP guard tiers** (`--twin-guard bijection`): the guard's
+  discrete-logarithm trapdoor now draws from a seven-tier table of verified
+  (prime, primitive-root) pairs spanning 8/10/16/20/32/48/62 bits (28 pairs,
+  all re-checked from scratch: GMP `factor` primality + `bc` square-and-
+  multiply primitive-root witness). Each integer leaf
+  picks the smallest tier whose square-and-multiply depth covers its width and
+  whose primes exceed its profiled value (so the `x < P` range gate still
+  fires), with a 30% jump to a strictly larger tier for diversity. Working
+  types scale with the tier (`i16`/`i32`/`i64`/`i128` casts) while the DLP
+  check stays collision-free on the gated domain and UB-free on every input
+  (`mulBits > 2·primeBits` so products never overflow the signed working type).
 - **UB-directed generation**: `symirsolve --require-ub` and
   `rysmith --require-ub` solve for symbol values that *trigger* UB on
   the chosen path; `rysmith --no-crc32` skips the checksum oracle.
