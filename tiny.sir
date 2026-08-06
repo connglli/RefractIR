@@ -1,0 +1,7 @@
+// tiny.sir
+fun @main() : i32 {
+  sym %?x : value i32 in [0, 10];
+^entry:
+  require %?x == 3, "x is 3";
+  ret %?x;
+}

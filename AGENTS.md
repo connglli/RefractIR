@@ -89,9 +89,18 @@ Key characteristics:
 | `rylink` | Compose leaf functions into whole programs (reify) |
 | `rytwin` | Transform a generated program into a semantically-equivalent variant (reify) |
 
-Documentation of each tool: [./docs/](./docs).
+Documentation of each tool: [./docs/](./docs). A hands-on walkthrough (build, tool usage, first program) is at [./GUIDE.md](./GUIDE.md).
 
 Remember: The interpreter, solver, and compiler backends are shared foundational for **all** RefractIR tooling. They should be kept **clean, correct, and well-tested**. They should also be kept **independent of any specific downstream tools**, with mentioning none in their implementation.
+
+## Repo Layout Quirks
+
+- `CLAUDE.md` and `GEMINI.md` are **symlinks to `AGENTS.md`** — edits to `AGENTS.md` propagate to all three automatically.
+- `vscode-refractir/` is a standalone VSCode syntax-highlighting extension, not part of the toolchain.
+- `alivesmt/` is a **vendored** Z3-based SMT backend (Alive2-derived). It is secondary: it has modeling gaps (floats, some aggregate/pointer patterns report "Unknown/Unimplemented kind") and the reify tools are not supported under it. **Bitwuzla is the default and the well-tested backend** — always build/test with `make SOLVER=bitwuzla`.
+- The solver backend is selected at **compile time** via the `SOLVER` Makefile variable. `make clean` also needs `SOLVER=bitwuzla` — the Makefile probes the solver *before* cleaning, so a bare `make clean` after `make SOLVER=alivesmt` fails.
+- There is **no CI** (no `.github/`). Quality gates are the local pre-commit hooks (`.pre-commit-config.yaml`): clang-format on C++ sources, ruff on Python, and a Conventional Commits check at the `commit-msg` stage.
+- The `fuzz/` directory currently contains only a README; the `symirfuzz.py` it references does not exist yet.
 
 ## Compilation / Analysis Pipeline
 
@@ -243,7 +252,15 @@ The test suite is managed via the `Makefile` targets:
 - `make test-backends`: Runs compiler backend compilation and execution tests for C (goto and --structured-lowering modes), WASM, and Python targets.
 - `make cross-validation`: Cross-validates interpreter execution outputs and UB behavior against compiled C binaries, in both goto and structured-lowering emission modes.
 - `make test-solver`: Runs symbolic execution and SMT constraint solver tests.
-- `make test-reify`: Runs differential random generation testing for rysmith and rylink.
+- `make test-reify`: Runs differential random generation testing for rysmith and rylink (`-n 100 --seed 1234`); forward the parallelism you want with `make -jN test-reify`.
+
+### Test-harness contract (know this before writing a test)
+
+- Tests are **all `*.sir` files found recursively** under the `test/` directory, grouped by component (`test/{lexer,parser,cfgbuilder,typechecker,semchecker,reducibility,interp,xval,solver,compile,sbackend}`). Each suite is a `test/lib/run_*_tests.py` script; run one directly, e.g. `python3 -m test.lib.run_interp_tests test/interp ./symiri`.
+- Metadata tags are read from the **first 10 lines** of each `.sir`: `// EXPECT: PASS` or `// EXPECT: FAIL:<subtype>`, plus `// INTERP_ARGS:`, `// COMPILER_ARGS:`, `// SOLVER_ARGS:` (tokenized), and `// SKIP: <TOOL>` (comma-separated tags; reason after `—`/`--`/`#`/`(`). A file with **no `EXPECT` tag is silently skipped** — don't write a test without one.
+- `FAIL:<subtype>` maps to a specific exit code (see `test/lib/run_interp_tests.py`): `LexError`=2, `ParseError`=3, `StaticError`=4, `UndefinedBehavior`=5, `RequireViolation`=6. `symiri --check` is the frontend-only mode used by the lexer/parser/typechecker/semchecker suites.
+- `make test-unit` is different: it runs `test/unit/run_*_tests.py` scripts that assert on a binary's stdout/sidecars/output layout, not on `.sir` metadata.
+- `make test-backends` needs `gcc` and a WASM runtime (wasmtime/wasmer/node) — WASM targets are skipped without one. Interpreter and cross-validation tests have a 5s per-file timeout.
 
 ## Dependency Management
 
@@ -272,7 +289,7 @@ Always follow good practices:
 
 1. Use git frequently and meaningfully
 2. Follow **Conventional Commits**
-3. Keep `README.md`, `SPEC.md`, `AGENT.md`, and `TODO.md` up to date
+3. Keep `README.md`, `AGENTS.md`, and `CHANGELOG.md` up to date, and the current spec `docs/SPEC_v0.2.3.md` (it doubles as the roadmap)
 4. Fix **all compiler warnings**
 5. Keep a clean, layered project structure
 6. Write high-quality comments that explain *why*, not *what*

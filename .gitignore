@@ -39,6 +39,18 @@ Thumbs.db
 *.log
 *.tmp
 
+# Scratch / experiment directories
+tmp/
+tmp_*/
+
+# Reify-generated sidecars (twin outputs, state profiles)
+*.p2.sir
+*.p2.c
+*.state.json
+
+# rytwin hand-verification output (docs/rytwin_handcheck.md)
+/twin.sir
+
 # Virtual environments
 venv
 __pycache__/

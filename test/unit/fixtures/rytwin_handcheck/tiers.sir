@@ -1,0 +1,12 @@
+// SOLVED: %pa0=5
+fun @tiers(%pa0: i8) : i8 {
+  let mut %a: i8 = 9;
+  let mut %b: i8 = 100;
+  ^entry:
+    br ^work;
+  ^work:
+    %a = %a + %pa0;
+    br ^exit;
+  ^exit:
+    ret %a;
+}

@@ -458,6 +458,8 @@ rylink -n 5 --target c --structured-lowering random -i pool/ -o progs/
 
 `rytwin` is an **equivalence-preserving program transformer**. Given a generated program `f1` (a rysmith leaf or a rylink whole program), it emits an equivalent program `f2` such that `f1(i) == f2(i)` for **every** input `i` — same result, same undefined-behaviour outcome. Whole programs are profiled from `@main`, and twins are grafted into any function along the executed trace; the state capture is frame-aware, so states are attributed to the right activation even when block labels repeat across functions.
 
+For a step-by-step hand-verification of a single twin — exact commands, the two versions of the block, feeding the input to both programs, and checking the guard fires on the profiled state — see [Hands-on: verifying a rytwin twin by hand](./rytwin_handcheck.md).
+
 rytwin only transforms **UB-free terminating** programs, because it profiles `f1` by interpreting it on its solved input. When the descriptor is present, a `trap` (`--require-ub`) or `diverge` (`--require-nonterm`) input is **rejected up front** with a clear message (profiling one would trap, the other would hang). Without a descriptor the profiling run is **bounded** by a block-step cap (`kNoDescProfileStepCap`, 3200): a terminating program finishes well within it, a trapping one throws UB, and a non-terminating one hits the cap — all reported as a clean failure rather than a hang.
 
 ### Usage
