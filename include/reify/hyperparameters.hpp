@@ -14,7 +14,7 @@
 //   - Per-width concrete-literal coefficient ranges.
 //
 // Not in scope (these live elsewhere as struct defaults or CLI-tunable flags):
-//   - n-funcs, n-vars, n-stmts, n-bbls, n-inits, max-retries, max-loop-iter
+//   - n-funcs, n-vars, n-stmts, n-bbls, n-concretes, max-retries, max-loop-iter
 //   - p-branch, p-backedge, timeouts, RNG seed
 //   - coef-domain / value-domain / index-domain (symbolic-coef domains)
 //   - max-ptr-depth, max-agg-nest, max-agg-elems

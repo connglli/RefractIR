@@ -164,7 +164,7 @@ W6. Lowering          - program.sir plus optional C / WASM / Python
 W7. Validation        - run the bundled entry and check its outcome
 ```
 
-Which realization a leaf brings is a choice among the `--n-inits` concretizations `rysmith` emitted for it, and it fixes the `i` and the `o` the splice is built from. `CallRealizeTransform` consumes each rewrite site at most once across the whole program: composing two rewrites on one literal would build a left-to-right call chain, `f1() + f2() + …`, whose prefix sums can wrap even though each rewrite is individually sound in bit-vector arithmetic.
+Which realization a leaf brings is a choice among the `--n-concretes` concretizations `rysmith` emitted for it, and it fixes the `i` and the `o` the splice is built from. `CallRealizeTransform` consumes each rewrite site at most once across the whole program: composing two rewrites on one literal would build a left-to-right call chain, `f1() + f2() + …`, whose prefix sums can wrap even though each rewrite is individually sound in bit-vector arithmetic.
 
 Every function in a bundle comes out of the same statement generator, so they read alike. W5 breaks that up by rewriting them with identities applied in the direction a compiler does not take: reversed peepholes, arithmetic and bitwise crossings, restructuring. The rule families live in [src/reify/antiopt](../src/reify/antiopt), driven by [include/reify/antiopt.hpp](../include/reify/antiopt.hpp). A bundled program is concrete, with no set of states to prove anything over, so only rules that cannot introduce a trapping operation apply; those hold whatever the state does, and so does any composition of them.
 
@@ -220,11 +220,11 @@ A region holding a non-intrinsic call is not twinned, since a callee could mutat
 rysmith [OPTIONS]
 ```
 
-The full option list is `rysmith --help`, declared in [src/rysmith.cpp](../src/rysmith.cpp). The knobs group into type control (`--no-fp`, `--max-ptr-depth`, `--max-agg-nest`, …), generation volume (`--n-vars`, `--n-stmts`, `--min-atoms`, `--off-path-multiplier`), operator repertoire (`--no-divmod`, `--no-select`, `--no-intrinsics`, …), CFG shape (`--n-bbls`, `--p-branch`, `--p-backedge`), solver control (`--timeout`, `--seed`, `--max-retries`), and output (`-n`, `--n-inits`, `--n-examples`, `-o`, `--target`, the `--emit-*` family). The sections below cover the modes whose semantics are not evident from the flag name.
+The full option list is `rysmith --help`, declared in [src/rysmith.cpp](../src/rysmith.cpp). The knobs group into type control (`--no-fp`, `--max-ptr-depth`, `--max-agg-nest`, …), generation volume (`--n-vars`, `--n-stmts`, `--min-atoms`, `--off-path-multiplier`), operator repertoire (`--no-divmod`, `--no-select`, `--no-intrinsics`, …), CFG shape (`--n-bbls`, `--p-branch`, `--p-backedge`), solver control (`--timeout`, `--seed`, `--max-retries`), and output (`-n`, `--n-concretes`, `--n-examples`, `-o`, `--target`, the `--emit-*` family). The sections below cover the modes whose semantics are not evident from the flag name.
 
 ```sh
 # 10 functions, 3 concretizations each, all validated
-rysmith -n 10 --n-inits 3 --validate -o out/
+rysmith -n 10 --n-concretes 3 --validate -o out/
 
 # 10 functions, two distinct solved examples per concretization
 rysmith -n 10 --n-examples 2 -o out/

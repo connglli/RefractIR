@@ -81,7 +81,7 @@ namespace refractir::reify {
 
     std::vector<Struct> structs;
 
-    // One per-init record. Carries the concrete .sir file
+    // One per-concretization record. Carries the concrete .sir file
     // the solver produced for this realization plus the solver-
     // synthesised values for each parameter and the return
     // expression. Values are stringified in the same format

@@ -151,9 +151,9 @@ struct GenerateResult {
   std::vector<ConcreteFile> produced;
 };
 
-// Strip the trailing init-letter suffix (`a`..`z`) from a .sir stem
+// Strip the trailing concrete-letter suffix (`a`..`z`) from a .sir stem
 // to recover the base function name. Stems are either `func_<id>_<i>`
-// (single init) or `func_<id>_<i><a..z>` (multi-init); drop one
+// (single concrete) or `func_<id>_<i><a..z>` (multi-concrete); drop one
 // trailing lowercase letter when the char before it is a digit.
 [[nodiscard]] static std::string getBaseFuncName(const fs::path &p) {
   std::string stem = p.stem().string();
@@ -250,10 +250,10 @@ struct LeafGenConfig {
   std::uint32_t timeoutMs = 0;
   SolvingMode solMode = SolvingMode::UBFree;
 
-  // Retry budget: `maxRetries` attempts per leaf, each solving `nInits`
-  // independent initializations.
+  // Retry budget: `maxRetries` attempts per leaf, each solving `nConcretes`
+  // independent concretizations.
   int maxRetries = 0;
-  int nInits = 0;
+  int nConcretes = 0;
 
   // Examples per concretized .sir. Example 1 is the concretized solve; extras
   // re-solve the template with fresh seeds and derive their output from the
@@ -332,7 +332,8 @@ sampleAttemptPath(const LeafGenConfig &opts, const RyCFG &cfg, std::mt19937 &rng
 }
 
 // The `// CFG:` / `// PATH:` banner every emitted .sir carries. Fixed for the
-// whole attempt: only the per-init sym and parameter solutions differ.
+// whole attempt: only the per-concretization sym and parameter solutions
+// differ.
 static void writePathHeader(
     std::ostream &os, const RyCFG &cfg, const std::vector<std::string> &path, bool requireNonterm
 ) {
@@ -431,7 +432,7 @@ static void armTrialClone(
   if (opts.verbose)
     std::cout << "[cfg] " << cfg.blocks.size() << " blocks\n";
 
-  // Generate VarCatalogue (shared across all inits for the same CFG)
+  // Generate VarCatalogue (shared across all concretizations for the same CFG)
   VarCatalogue vars = genVarCatalogue(rng, varCfg);
 
   if (opts.verbose)
@@ -454,9 +455,9 @@ static void armTrialClone(
       writePathHeader(os, cfg, path, opts.requireNonterm);
     };
 
-    // Generate opts.nInits independently-seeded programs
+    // Generate opts.nConcretes independently-seeded programs
     std::vector<ConcreteFile> produced;
-    for (int initIdx = 0; initIdx < opts.nInits; initIdx++) {
+    for (int concreteIdx = 0; concreteIdx < opts.nConcretes; concreteIdx++) {
       FuncGenConfig fcfg;
       fcfg.funcName = funcName;
       fcfg.seed = rng();
@@ -504,7 +505,7 @@ static void armTrialClone(
       // Optionally dump symbolic program
       if (opts.keepSymbolic) {
         auto symPath = opts.outDir / (funcName + reify::rysmith::hp::kSymInfix +
-                                      std::to_string(initIdx) + ".sir");
+                                      std::to_string(concreteIdx) + ".sir");
         std::ofstream ofs(symPath);
         emitPathHeader(ofs);
         SIRPrinter printer(ofs);
@@ -522,7 +523,8 @@ static void armTrialClone(
       checkOpts.functionAnalyses = false;
       if (!checkProgram(prog, diags, checkOpts)) {
         if (opts.verbose) {
-          std::cerr << "[validate] init " << initIdx << ": generated program failed validation\n";
+          std::cerr << "[validate] concrete " << concreteIdx
+                    << ": generated program failed validation\n";
           for (const auto &d: diags.diags)
             if (d.level == DiagLevel::Error)
               std::cerr << "  error: " << d.message << "\n";
@@ -533,7 +535,7 @@ static void armTrialClone(
       // Solve
       SymbolicExecutor::Config solverCfg;
       solverCfg.timeout_ms = opts.timeoutMs;
-      solverCfg.seed = baseSeed + static_cast<std::uint32_t>(attempt * 100 + initIdx);
+      solverCfg.seed = baseSeed + static_cast<std::uint32_t>(attempt * 100 + concreteIdx);
       solverCfg.num_threads = 1;
       solverCfg.num_smt_threads = 1;
       solverCfg.mode = opts.solMode;
@@ -544,23 +546,23 @@ static void armTrialClone(
         res = executor.solve("@" + funcName, pathLabels);
       } catch (const std::exception &e) {
         if (opts.verbose)
-          std::cerr << "[solver] init " << initIdx << ": exception: " << e.what() << "\n";
+          std::cerr << "[solver] concrete " << concreteIdx << ": exception: " << e.what() << "\n";
         res.unknown = true;
         continue;
       } catch (...) {
         if (opts.verbose)
-          std::cerr << "[solver] init " << initIdx << ": unknown exception\n";
+          std::cerr << "[solver] concrete " << concreteIdx << ": unknown exception\n";
         res.unknown = true;
         continue;
       }
 
       if (res.sat) {
-        // Init suffix is a lowercase letter a..z so descriptor
+        // Concrete suffix is a lowercase letter a..z so descriptor
         // consumers (rylink) can address a specific concretization by
-        // `<funcName><letter>`. opts.nInits is clamped to [1, 26] at CLI
-        // parse time, so initIdx is always in range.
-        char letter = static_cast<char>('a' + initIdx);
-        std::string outName = opts.nInits > 1 ? funcName + letter + ".sir" : funcName + ".sir";
+        // `<funcName><letter>`. opts.nConcretes is clamped to [1, 26] at CLI
+        // parse time, so concreteIdx is always in range.
+        char letter = static_cast<char>('a' + concreteIdx);
+        std::string outName = opts.nConcretes > 1 ? funcName + letter + ".sir" : funcName + ".sir";
         auto concretePath = opts.outDir / outName;
 
         // Snapshot every piece of entry metadata we'll need (params, syms)
@@ -598,7 +600,7 @@ static void armTrialClone(
         std::vector<ExtraCandidate> extraCandidates;
         if (opts.nExamples > 1 && entry) {
           const std::uint32_t slotSeed =
-              baseSeed + static_cast<std::uint32_t>(attempt * 100 + initIdx);
+              baseSeed + static_cast<std::uint32_t>(attempt * 100 + concreteIdx);
           for (int j = 1; j < opts.nExamples; ++j) {
             for (int eTry = 0; eTry < kExtraExampleTries; ++eTry) {
               Program trialProg = cloneProgram(prog);
@@ -617,12 +619,13 @@ static void armTrialClone(
                 extraRes = extraExec.solve("@" + funcName, pathLabels);
               } catch (...) {
                 if (opts.verbose)
-                  std::cerr << "[solver] init " << initIdx << " example " << j << ": exception\n";
+                  std::cerr << "[solver] concrete " << concreteIdx << " example " << j
+                            << ": exception\n";
                 continue;
               }
               if (!extraRes.sat) {
                 if (opts.verbose)
-                  std::cerr << "[solver] init " << initIdx << " example " << j << ": "
+                  std::cerr << "[solver] concrete " << concreteIdx << " example " << j << ": "
                             << (extraRes.unsat ? "UNSAT" : "UNKNOWN") << "\n";
                 continue;
               }
@@ -686,8 +689,9 @@ static void armTrialClone(
         //
         // Capture failure (symiri exits non-zero or returns no
         // parseable Result line) typically means the generated
-        // function tripped UB that the solver missed. Treat the init
-        // as failed: skip the .sir write and try the next init.
+        // function tripped UB that the solver missed. Treat the
+        // concretization as failed: skip the .sir write and try the
+        // next one.
         std::string crcRetValue;
         if (rewriteApplied && entry) {
           auto captured = runCrc32Oracle(
@@ -696,10 +700,10 @@ static void armTrialClone(
           );
           if (!captured) {
             if (opts.verbose) {
-              std::cerr << "[oracle] init " << initIdx
+              std::cerr << "[oracle] concrete " << concreteIdx
                         << ": symiri capture failed for the minimal "
                            "checksum oracle of "
-                        << concretePath << "; skipping init\n";
+                        << concretePath << "; skipping concretization\n";
             }
             continue;
           }
@@ -739,7 +743,7 @@ static void armTrialClone(
             );
             if (!captured) {
               if (opts.verbose)
-                std::cerr << "[examples] init " << initIdx << ": oracle rejected example "
+                std::cerr << "[examples] concrete " << concreteIdx << ": oracle rejected example "
                           << examples.size() << "\n";
               continue;
             }
@@ -822,10 +826,10 @@ static void armTrialClone(
           );
         }
         if (opts.verbose)
-          std::cout << "[emit] init " << initIdx << ": " << concretePath << "\n";
+          std::cout << "[emit] concrete " << concreteIdx << ": " << concretePath << "\n";
       } else if (opts.verbose) {
-        std::cerr << "[solver] init " << initIdx << ": " << (res.unsat ? "UNSAT" : "UNKNOWN")
-                  << "\n";
+        std::cerr << "[solver] concrete " << concreteIdx << ": "
+                  << (res.unsat ? "UNSAT" : "UNKNOWN") << "\n";
       }
     }
 
@@ -833,7 +837,7 @@ static void armTrialClone(
       return GenerateResult{std::move(produced)};
 
     if (opts.verbose)
-      std::cerr << "[solver] attempt=" << attempt << ": all inits failed, retrying\n";
+      std::cerr << "[solver] attempt=" << attempt << ": all concretizations failed, retrying\n";
   }
 
   return GenerateResult{};
@@ -898,8 +902,8 @@ static void armTrialClone(
                             cxxopts::value<std::string>()->default_value("[-2147483647, 2147483647]"))
       ("index-domain",      "Domain for index symbols",
                             cxxopts::value<std::string>()->default_value("[1, 30]"))
-      // Retry/inits
-      ("n-inits",           "Concretizations per template (different seeds)",
+      // Retry/concretizations
+      ("n-concretes",       "Concretizations per template (different seeds)",
                             cxxopts::value<int>()->default_value("3"))
       ("n-examples",        "Input/output examples per concrete .sir; ub-free mode only",
                             cxxopts::value<int>()->default_value("1"))
@@ -1272,19 +1276,19 @@ int main(int argc, char **argv) {
   int nStmts = result["n-stmts"].as<int>();
   int maxLoopIter = result["max-loop-iter"].as<int>();
   int minLoopIter = result["min-loop-iter"].as<int>();
-  // Clamp to [1, 26] — each init's concrete file is named
+  // Clamp to [1, 26] — each concretization's file is named
   // with a lowercase-letter suffix `func_<id>_<i><a..z>.sir`, so
   // 26 is the natural cap. 0 is meaningless (no concretization).
-  int nInits = result["n-inits"].as<int>();
-  if (nInits < 1) {
-    std::cerr << "warning: --n-inits clamped to 1 (was " << nInits << ")\n";
-    nInits = 1;
-  } else if (nInits > 26) {
-    std::cerr << "warning: --n-inits clamped to 26 (was " << nInits << ")\n";
-    nInits = 26;
+  int nConcretes = result["n-concretes"].as<int>();
+  if (nConcretes < 1) {
+    std::cerr << "warning: --n-concretes clamped to 1 (was " << nConcretes << ")\n";
+    nConcretes = 1;
+  } else if (nConcretes > 26) {
+    std::cerr << "warning: --n-concretes clamped to 26 (was " << nConcretes << ")\n";
+    nConcretes = 26;
   }
-  // Same [1, 26] budget as n-inits: beyond the letter budget the per-example
-  // re-solve and replay cost dominates anyway.
+  // Same [1, 26] budget as n-concretes: beyond the letter budget the
+  // per-example re-solve and replay cost dominates anyway.
   int nExamples = result["n-examples"].as<int>();
   if (nExamples < 1) {
     std::cerr << "warning: --n-examples clamped to 1 (was " << nExamples << ")\n";
@@ -1321,12 +1325,13 @@ int main(int argc, char **argv) {
            "no output to record)\n";
     return 2;
   }
-  // Wall-clock budget per function: retries × inits, including the
-  // kExtraExampleTries re-solves per extra example, plus 50 ms of non-solver
-  // overhead. Compilation runs outside the thread.
-  std::uint32_t perInitSolves = 1u + static_cast<std::uint32_t>(nExamples - 1) * kExtraExampleTries;
+  // Wall-clock budget per function: retries × the n-concretes solves
+  // (including the kExtraExampleTries re-solves per extra example), plus 50 ms
+  // of non-solver overhead. Compilation runs outside the thread.
+  std::uint32_t perConcreteSolves =
+      1u + static_cast<std::uint32_t>(nExamples - 1) * kExtraExampleTries;
   std::uint32_t funcTimeoutMs = static_cast<std::uint32_t>(
-      static_cast<std::uint64_t>(maxRetries + 1) * nInits * perInitSolves * timeoutMs + 50
+      static_cast<std::uint64_t>(maxRetries + 1) * nConcretes * perConcreteSolves * timeoutMs + 50
   );
   bool keepSymbolic = result.count("keep-symbolic") > 0;
   bool emitDesc = result.count("emit-desc") > 0;
@@ -1440,7 +1445,7 @@ int main(int argc, char **argv) {
   leafCfg.timeoutMs = timeoutMs;
   leafCfg.solMode = solMode;
   leafCfg.maxRetries = maxRetries;
-  leafCfg.nInits = nInits;
+  leafCfg.nConcretes = nConcretes;
   leafCfg.nExamples = nExamples;
   leafCfg.outDir = outDir;
   leafCfg.keepSymbolic = keepSymbolic;
