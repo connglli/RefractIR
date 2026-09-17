@@ -15,13 +15,14 @@ seed="$RANDOM$RANDOM"
 NUM_FUNCS=100
 NUM_PROGS=$((NUM_FUNCS * 20))
 STRUCTURED_LOWERING=random # true|false|random
+EXAMPLES=3
 
 # =========================================================================
 # Test rysmith
 # =========================================================================
 
 rm -rf rysmith_out
-./rysmith -n $NUM_FUNCS --target wasm --emit-main --validate --seed "$seed" --structured-lowering "$STRUCTURED_LOWERING"
+./rysmith -n $NUM_FUNCS --target wasm --emit-main --validate --seed "$seed" --structured-lowering "$STRUCTURED_LOWERING" --n-examples $EXAMPLES
 
 # Enter rysmith out to build every .wat and run it
 for f in rysmith_out/*.wat; do
@@ -33,7 +34,7 @@ done
 # =========================================================================
 
 rm -rf rysmith_out
-./rysmith -n $NUM_FUNCS --target wasm --emit-desc --validate --seed "$seed" --structured-lowering "$STRUCTURED_LOWERING"
+./rysmith -n $NUM_FUNCS --target wasm --emit-desc --validate --seed "$seed" --structured-lowering "$STRUCTURED_LOWERING" --n-examples $EXAMPLES
 
 rm -rf rylink_out
 ./rylink -n $NUM_PROGS --target wasm --emit-main --validate --seed "$seed" --no-split-by-source --structured-lowering "$STRUCTURED_LOWERING"

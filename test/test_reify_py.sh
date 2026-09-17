@@ -14,13 +14,14 @@ cd "$(dirname "$0")/.."
 seed="$RANDOM$RANDOM"
 NUM_FUNCS=100
 NUM_PROGS=$((NUM_FUNCS * 20))
+EXAMPLES=3
 
 # =========================================================================
 # Test rysmith
 # =========================================================================
 
 rm -rf rysmith_out
-./rysmith -n $NUM_FUNCS --target python --emit-main --validate --seed "$seed"
+./rysmith -n $NUM_FUNCS --target python --emit-main --validate --seed "$seed" --n-examples $EXAMPLES
 
 # Enter rysmith out to build every .py and run it
 for f in rysmith_out/*.py; do
@@ -32,7 +33,7 @@ done
 # =========================================================================
 
 rm -rf rysmith_out
-./rysmith -n $NUM_FUNCS --target python --emit-desc --validate --seed "$seed"
+./rysmith -n $NUM_FUNCS --target python --emit-desc --validate --seed "$seed" --n-examples $EXAMPLES
 
 rm -rf rylink_out
 ./rylink -n $NUM_PROGS --target python --emit-main --validate --seed "$seed" --no-split-by-source
