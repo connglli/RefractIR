@@ -1,5 +1,7 @@
 #include "solver/solved_header.hpp"
 
+#include <algorithm>
+
 #include "ast/ast.hpp"
 
 namespace refractir {
@@ -36,10 +38,15 @@ namespace refractir {
       const std::string &retText
   ) {
     // Value format via formatModelValue; line shape via the overload above.
+    // Sorted by name: unordered_map iteration order is not declaration order,
+    // so without this the line's field order varies run to run.
     std::vector<std::pair<std::string, std::string>> pairs;
     pairs.reserve(paramModel.size());
     for (const auto &[name, val]: paramModel)
       pairs.emplace_back(name, formatModelValue(val));
+    std::sort(pairs.begin(), pairs.end(), [](const auto &a, const auto &b) {
+      return a.first < b.first;
+    });
     writeSolvedHeader(out, pairs, retText);
   }
 

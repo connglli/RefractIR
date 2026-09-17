@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -609,10 +610,15 @@ static void armTrialClone(
               );
               SymbolicExecutor::Config extraCfg = solverCfg;
               // Distinct per (example, try): the same seed would re-answer
-              // the primary model instead of proposing another input.
-              extraCfg.seed = slotSeed * (static_cast<std::uint32_t>(opts.nExamples) + 1) +
-                              (static_cast<std::uint32_t>(j) - 1) * kExtraExampleTries +
-                              static_cast<std::uint32_t>(eTry);
+              // the primary model instead of proposing another input. Mixed
+              // in 64 bits and folded down: a 32-bit multiply wraps for
+              // large master seeds and an even stride is not injective,
+              // so distinct slots could draw identical seeds.
+              const std::uint64_t mixed = static_cast<std::uint64_t>(slotSeed) *
+                                              (static_cast<std::uint64_t>(opts.nExamples) + 1) +
+                                          (static_cast<std::uint64_t>(j) - 1) * kExtraExampleTries +
+                                          static_cast<std::uint64_t>(eTry);
+              extraCfg.seed = static_cast<std::uint32_t>(mixed ^ (mixed >> 32));
               SymbolicExecutor extraExec(trialProg, extraCfg, makeSolverFactory());
               SymbolicExecutor::Result extraRes;
               try {
@@ -1103,6 +1109,10 @@ static void runGenerationLoop(
           }
         } else {
           for (std::size_t ei = 0; ei < cf.examples.size(); ++ei) {
+            // No consumer for further runs: validation is off and only
+            // examples[0] carries the rytwin state profile.
+            if (!run.validate && (ei > 0 || !wantProfile))
+              break;
             const FuncDescriptor::Realization::Example &ex = cf.examples[ei];
             std::vector<std::string> paramArgs = extractParamArgs(ex.paramValues);
             StateProfile profile;
@@ -1327,12 +1337,15 @@ int main(int argc, char **argv) {
   }
   // Wall-clock budget per function: retries × the n-concretes solves
   // (including the kExtraExampleTries re-solves per extra example), plus 50 ms
-  // of non-solver overhead. Compilation runs outside the thread.
+  // of non-solver overhead. Compilation runs outside the thread. Saturated:
+  // large --max-retries/--timeout inputs would otherwise wrap the 32-bit cast
+  // into a near-zero budget.
   std::uint32_t perConcreteSolves =
       1u + static_cast<std::uint32_t>(nExamples - 1) * kExtraExampleTries;
-  std::uint32_t funcTimeoutMs = static_cast<std::uint32_t>(
-      static_cast<std::uint64_t>(maxRetries + 1) * nConcretes * perConcreteSolves * timeoutMs + 50
-  );
+  std::uint32_t funcTimeoutMs = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+      static_cast<std::uint64_t>(maxRetries + 1) * nConcretes * perConcreteSolves * timeoutMs + 50,
+      0xFFFFFFFFu
+  ));
   bool keepSymbolic = result.count("keep-symbolic") > 0;
   bool emitDesc = result.count("emit-desc") > 0;
   bool doValidate = result.count("validate") > 0;

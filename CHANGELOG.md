@@ -28,6 +28,7 @@ Spec: [docs/SPEC_v0.2.3.md](./docs/SPEC_v0.2.3.md), which doubles as the release
 
 ### Changed
 
+- `rysmith --n-inits` renamed to `--n-concretes`; the old flag no longer parses.
 - Internal modularization: the interpreter, the solver and the C/WASM backends split into cohesive translation units with extracted collaborators (`TypeLayout`, `Memory`, `Provenance`) and decomposed visitor dispatches; backend files renamed to a target-prefix convention; C vector lowering made target-specific. The shared mechanism the reify tools had accumulated moved to the components that own it: the parse-and-check pipeline, the type and access-path queries, the byte-offset walk and pointer provenance, AST cloning and construction, the emit driver, declaration identity, the solved-program header, and the state-set analysis.
 
 ### Fixed

@@ -264,7 +264,7 @@ That return value is the expected output `o`. The solver never sees the CRC32 re
 
 `--emit-main` appends a `@main()` that calls the entry with the solver's parameter values and asserts the return against the captured checksum through `@check_chksum(EXPECTED, %r);`. The C lowering of `@check_chksum` aborts on mismatch, and that externally visible side effect anchors the whole call chain against interprocedural constant propagation, so the body survives `-O3 -flto`.
 
-`--n-examples N` asks for `N` distinct input/output examples per concretized `.sir`. The first is the concretized solve; each further one comes from re-solving a clone of the same symbolic template armed with two splices into the entry block: one `require %?s == v` per solved sym pinning it to the value the emitted program embeds, and one exclusion require per collected input, `%paK != v` on a single parameter coordinate.
+`--n-examples N` asks for `N` distinct input/output examples per concretized `.sir`. The first is the concretized solve; each further one comes from re-solving a clone of the same symbolic template armed with two splices into the entry block: one `require %?s == v` per solved sym pinning it to the value the emitted program embeds, and one exclusion require per collected input, `%paK != v` on a single parameter coordinate. Only the first example is consumed by `rylink` and `rytwin`.
 
 ### Generating UB-triggering programs
 
