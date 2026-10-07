@@ -231,6 +231,10 @@ The annotated source is [examples/minicipher_v022.sir](./examples/minicipher_v02
 └── Makefile          # Build system
 ```
 
+## 🐞 Bug Showcases
+
+Please refer to [LLVM](https://github.com/llvm/llvm-project/issues?q=is%3Aissue+author%3Azhendongsu+created%3A%3E2026-06-01) and [GCC](https://gcc.gnu.org/bugzilla/buglist.cgi?email1=zhendong&emailreporter1=1&emailtype1=substring&f1=creation_ts&o1=greaterthan&product=gcc&query_format=advanced&v1=2026-06-01).
+
 ## 📚 Documentation
 
 * [Changelog](./CHANGELOG.md): release history from v0.0.1 onward.
